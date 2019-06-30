@@ -1,0 +1,11 @@
+APPNAME=Medusa Pass
+VERSION=1.0
+ADDR=:3000
+# DB
+DB_DIALECT=sqlite3
+DB_PARAMS=medusa-pass.sqlite
+# Valeurs de CCP pour pouvoir intérroger ESI
+CLIENT_ID=
+SECRET_KEY=
+# Transmis au client HTTP, si CCP a besoin de nous contacter
+USER_AGENT=Medusa Pass API Server 1.0, contact Tapludsou ingame
