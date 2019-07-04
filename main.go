@@ -1,12 +1,18 @@
 package main
 
 import (
+	"encoding/base64"
 	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/go-ini/ini"
+	"github.com/imroc/req"
 	"github.com/jinzhu/gorm"
 	_ "github.com/jinzhu/gorm/dialects/sqlite"
 )
@@ -17,7 +23,18 @@ var (
 	cfg *ini.Section
 	// DB accès base de donnée sqlite3, au niveau de cette application API
 	DB *gorm.DB
+	// header map[string]string
+	b64 string
 )
+
+// Token table pour Gorm
+type Token struct {
+	gorm.Model
+	AccessToken   string
+	RefreshToken  string
+	CharacterID   int64
+	CharacterName string
+}
 
 func init() {
 	cfgFile, err := ini.InsensitiveLoad(configFile)
@@ -29,7 +46,9 @@ func init() {
 	if err != nil {
 		log.Fatalln("Erreur ouverture base de donnée", err.Error())
 	}
+	db.AutoMigrate(&Token{})
 	DB = db
+	b64 = base64.StdEncoding.EncodeToString([]byte(cfg.Key("CLIENT_ID").String() + ":" + cfg.Key("SECRET_KEY").String()))
 }
 
 // SetupRouter le routeur pour recevoir les requetes HTTP
@@ -47,6 +66,8 @@ func SetupRouter() *gin.Engine {
 
 	router.Use(cors.New(config))
 	router.GET("/ping", GetPing)
+	router.GET("/token", GetToken)
+	router.GET("/refresh", GetRefresh)
 	return router
 }
 
@@ -55,9 +76,98 @@ func GetPing(c *gin.Context) {
 	c.JSON(200, gin.H{"message": "pong"})
 }
 
+// GetToken répond par un token
+func GetToken(c *gin.Context) {
+	code, _ := c.GetQuery("code")
+	header := req.Header{
+		"Accept":        "application/json",
+		"Authorization": "Basic " + b64,
+		"User-Agent":    cfg.Key("USER_AGENT").String(),
+	}
+	param := req.Param{
+		"grant_type": "authorization_code",
+		"code":       code,
+	}
+	// only url is required, others are optional.
+	r, err := req.Post("https://login.eveonline.com/oauth/token", header, param)
+	if err != nil {
+		log.Println("Erreur requête obtention token")
+		c.JSON(500, gin.H{"status": http.StatusInternalServerError, "error": err})
+		return
+	}
+	var result map[string]interface{}
+	r.ToJSON(&result)    // response => struct/map
+	log.Printf("%+v", r) // print info (try it, you may surprise)
+	accessToken, _ := result["access_token"].(string)
+	refreshToken, _ := result["refresh_token"].(string)
+	header["Authorization"] = "Bearer " + accessToken
+	r, err = req.Get("https://login.eveonline.com/oauth/verify", header)
+	if err != nil {
+		log.Println("Erreur requête vérification")
+		c.JSON(500, gin.H{"status": http.StatusInternalServerError, "error": err})
+		return
+	}
+	r.ToJSON(&result)
+	log.Printf("%+v", r)
+	characterName, _ := result["CharacterName"].(string)
+	characterID, _ := result["CharacterID"].(float64)
+	DB.Create(&Token{AccessToken: accessToken, RefreshToken: refreshToken, CharacterID: int64(characterID), CharacterName: characterName})
+	c.JSON(200, gin.H{"token": accessToken, "characterName": characterName, "characterID": characterID})
+}
+
+// GetRefresh répond par un nouveau token par le refresh token stocké en base de donnée
+func GetRefresh(c *gin.Context) {
+	token, ok := c.GetQuery("token")
+	if !ok {
+		log.Println("Token manquant")
+		c.JSON(500, gin.H{"status": http.StatusInternalServerError, "error": "Token not found"})
+		return
+	}
+	clientID, ok := c.GetQuery("client_ID")
+	if !ok || (clientID != cfg.Key("CLIENT_ID").String()) {
+		log.Println("Client_id manquant ou non correspondant")
+		c.JSON(500, gin.H{"status": http.StatusInternalServerError, "error": "Client_id not found"})
+		return
+	}
+	var t Token
+	DB.Where(&Token{AccessToken: token}).First(&t)
+	if t.RefreshToken == "" {
+		log.Println("AccessToken non trouvé en BDD")
+		c.JSON(500, gin.H{"status": http.StatusInternalServerError, "error": "No access token found"})
+		return
+	}
+	header := req.Header{
+		"Accept":        "application/json",
+		"Authorization": "Basic " + b64,
+		"User-Agent":    cfg.Key("USER_AGENT").String(),
+	}
+	param := req.Param{
+		"grant_type":    "refresh_token",
+		"refresh_token": t.RefreshToken,
+	}
+	r, err := req.Post("https://login.eveonline.com/oauth/refresh", header, param)
+	if err != nil {
+		log.Println("Erreur requête obtention access_token par le refresh_token")
+		c.JSON(500, gin.H{"status": http.StatusInternalServerError, "error": err})
+		return
+	}
+	var result map[string]interface{}
+	r.ToJSON(&result) // response => struct/map
+	accessToken, _ := result["access_token"].(string)
+	c.JSON(200, gin.H{"token": accessToken})
+}
+
 func main() {
 	gin.SetMode(gin.DebugMode)
 	defer DB.Close()
+	c := make(chan os.Signal)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-c
+		log.Println("\r- Ctrl+C pressed in Terminal")
+		// cleanup()
+		os.Exit(1)
+	}()
 	router := SetupRouter()
 	router.Run(cfg.Key("ADDR").String())
 }
