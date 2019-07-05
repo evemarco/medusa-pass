@@ -17,7 +17,7 @@ import (
 	_ "github.com/jinzhu/gorm/dialects/sqlite"
 )
 
-const configFile = "config.ini"
+const configFile = "medusa-pass.ini"
 
 var (
 	cfg *ini.Section
