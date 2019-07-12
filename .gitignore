@@ -16,3 +16,4 @@
 
 *.sqlite
 config.ini
+medusa-pass.ini
