@@ -66,8 +66,10 @@ func SetupRouter() *gin.Engine {
 
 	router.Use(cors.New(config))
 	router.GET("/ping", GetPing)
+	// /token=code=xxx
 	router.GET("/token", GetToken)
-	router.GET("/refresh", GetRefresh)
+	// /refresh { token: xxx, client_ID: xxx }
+	router.POST("/refresh", PostRefresh)
 	return router
 }
 
@@ -115,22 +117,29 @@ func GetToken(c *gin.Context) {
 	c.JSON(200, gin.H{"token": accessToken, "characterName": characterName, "characterID": characterID})
 }
 
-// GetRefresh répond par un nouveau token par le refresh token stocké en base de donnée
-func GetRefresh(c *gin.Context) {
-	token, ok := c.GetQuery("token")
-	if !ok {
-		log.Println("Token manquant")
-		c.JSON(500, gin.H{"status": http.StatusInternalServerError, "error": "Token not found"})
-		return
-	}
-	clientID, ok := c.GetQuery("client_ID")
-	if !ok || (clientID != cfg.Key("CLIENT_ID").String()) {
-		log.Println("Client_id manquant ou non correspondant")
-		c.JSON(500, gin.H{"status": http.StatusInternalServerError, "error": "Client_id not found"})
-		return
+// Refresh to map post request
+type Refresh struct {
+	Token    string `form:"token" json:"token" xml:"token"  binding:"required"`
+	ClientID string `form:"client_ID" json:"client_ID" xml:"client_ID" binding:"required"`
+}
+
+// PostRefresh répond par un nouveau token par le refresh token stocké en base de donnée
+func PostRefresh(c *gin.Context) {
+	var refresh Refresh
+	if c.ShouldBind(&refresh) != nil {
+		if refresh.Token == "" {
+			log.Println("Token manquant")
+			c.JSON(500, gin.H{"status": http.StatusInternalServerError, "error": "Token not found"})
+			return
+		}
+		if refresh.ClientID == "" || (refresh.ClientID != cfg.Key("CLIENT_ID").String()) {
+			log.Println("Client_id manquant ou non correspondant")
+			c.JSON(500, gin.H{"status": http.StatusInternalServerError, "error": "Client_id not found"})
+			return
+		}
 	}
 	var t Token
-	DB.Where(&Token{AccessToken: token}).First(&t)
+	DB.Where(&Token{AccessToken: refresh.Token}).First(&t)
 	if t.RefreshToken == "" {
 		log.Println("AccessToken non trouvé en BDD")
 		c.JSON(500, gin.H{"status": http.StatusInternalServerError, "error": "No access token found"})
@@ -145,7 +154,7 @@ func GetRefresh(c *gin.Context) {
 		"grant_type":    "refresh_token",
 		"refresh_token": t.RefreshToken,
 	}
-	r, err := req.Post("https://login.eveonline.com/oauth/refresh", header, param)
+	r, err := req.Post("https://login.eveonline.com/oauth/token", header, param)
 	if err != nil {
 		log.Println("Erreur requête obtention access_token par le refresh_token")
 		c.JSON(500, gin.H{"status": http.StatusInternalServerError, "error": err})
@@ -153,7 +162,10 @@ func GetRefresh(c *gin.Context) {
 	}
 	var result map[string]interface{}
 	r.ToJSON(&result) // response => struct/map
+	log.Println(r)
 	accessToken, _ := result["access_token"].(string)
+	t.AccessToken = accessToken
+	DB.Save(&t)
 	c.JSON(200, gin.H{"token": accessToken})
 }
 
