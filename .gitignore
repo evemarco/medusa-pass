@@ -15,5 +15,6 @@
 # vendor/
 
 *.sqlite
-config.ini
+*.ini
 medusa-pass.ini
+prod/
