@@ -1,6 +1,8 @@
 APPNAME=Medusa Pass
 VERSION=1.0
 ADDR=:3000
+# chemin après ADDR, /api par exemple ou vide
+PATH=
 # DB
 DB_DIALECT=sqlite3
 DB_PARAMS=medusa-pass.sqlite

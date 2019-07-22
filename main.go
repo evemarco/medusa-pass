@@ -65,11 +65,11 @@ func SetupRouter() *gin.Engine {
 	config.MaxAge = 12 * time.Hour // - Preflight requests cached for 12 hours
 
 	router.Use(cors.New(config))
-	router.GET("/ping", GetPing)
+	router.GET(cfg.Key("PATH").String()+"/ping", GetPing)
 	// /token=code=xxx
-	router.GET("/token", GetToken)
+	router.GET(cfg.Key("PATH").String()+"/token", GetToken)
 	// /refresh { token: xxx, client_ID: xxx }
-	router.POST("/refresh", PostRefresh)
+	router.POST(cfg.Key("PATH").String()+"/refresh", PostRefresh)
 	return router
 }
 
